@@ -1,0 +1,206 @@
+# Paul_Smart_Tracker_streamlit_v3.py
+# Paul’s Smart Tracker — Streamlit Edition (v3.0, Dark)
+# Full-history chart, CSV logging, backups, cleanup (30-day retention)
+# Requirements: streamlit, pandas, plotly
+
+import os
+import shutil
+from datetime import datetime, timedelta
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+
+# ===== CONFIG =====
+USER_NAME = "Paul"
+BACKUP_FOLDER = "Paul_Finance_Backup"
+CSV_FILENAME = "finance_log.csv"
+CSV_PATH = os.path.join(BACKUP_FOLDER, CSV_FILENAME)
+BACKUP_RETENTION_DAYS = 30
+RECOMMENDATION_RATIO = 0.30  # 30% of disposable income
+
+os.makedirs(BACKUP_FOLDER, exist_ok=True)
+
+# ===== PAGE CONFIG & DARK THEME STYLE =====
+st.set_page_config(page_title="Paul's Smart Tracker", layout="centered", initial_sidebar_state="expanded")
+
+# Minimal dark CSS for background and text:
+st.markdown(
+    """
+    <style>
+    .reportview-container {
+        background: #0e1116;
+        color: #E6EEF3;
+    }
+    .stApp {
+        background: linear-gradient(180deg,#0e1116,#0b0d11);
+        color: #E6EEF3;
+    }
+    .card {
+        background: #0f1720;
+        border-radius: 10px;
+        padding: 10px;
+    }
+    .stButton>button {
+        background-color: #1f6feb;
+        color: white;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("💷 Paul’s Smart Tracker — Streamlit (Dark)")
+st.caption("Full-history dashboard: income, expenses, and recommended investment")
+
+# ===== Helpers =====
+def read_log():
+    if not os.path.exists(CSV_PATH):
+        # return empty DataFrame with expected columns
+        cols = ["Date", "Income", "Courses", "Laptop_Appliances", "Instruments", "Other", "Total_Expenses", "Recommended_Investment"]
+        return pd.DataFrame(columns=cols)
+    try:
+        df = pd.read_csv(CSV_PATH)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["Date", "Income", "Courses", "Laptop_Appliances", "Instruments", "Other", "Total_Expenses", "Recommended_Investment"])
+
+def save_row(row: dict):
+    # append row to CSV
+    df_exists = os.path.exists(CSV_PATH)
+    df = read_log()
+    new_df = pd.DataFrame([row])
+    if df_exists:
+        new_df.to_csv(CSV_PATH, mode="a", header=False, index=False)
+    else:
+        new_df.to_csv(CSV_PATH, mode="w", header=True, index=False)
+    # create dated backup copy
+    today = datetime.now().strftime("%Y-%m-%d")
+    backup_name = f"investment_backup_{today}.csv"
+    backup_path = os.path.join(BACKUP_FOLDER, backup_name)
+    try:
+        shutil.copy(CSV_PATH, backup_path)
+    except Exception:
+        pass
+    return backup_path
+
+def cleanup_old_backups(days=BACKUP_RETENTION_DAYS):
+    cutoff = datetime.now() - timedelta(days=days)
+    removed = []
+    for fname in os.listdir(BACKUP_FOLDER):
+        if fname.startswith("investment_backup_") and fname.endswith(".csv"):
+            date_part = fname.replace("investment_backup_", "").replace(".csv", "")
+            try:
+                dt = datetime.strptime(date_part, "%Y-%m-%d")
+                if dt < cutoff:
+                    path = os.path.join(BACKUP_FOLDER, fname)
+                    os.remove(path)
+                    removed.append(fname)
+            except Exception:
+                continue
+    return removed
+
+def folder_size_mb(path):
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            if os.path.isfile(fp):
+                total += os.path.getsize(fp)
+    return total / (1024 * 1024)
+
+# ===== Sidebar: controls & info =====
+st.sidebar.header(f"Welcome, {USER_NAME}")
+st.sidebar.markdown("Use the form below to add a weekly entry. The full-history chart is shown on the page.")
+if st.sidebar.button("Download CSV"):
+    df_full = read_log()
+    if not df_full.empty:
+        st.sidebar.download_button("Download finance_log.csv", data=df_full.to_csv(index=False), file_name=CSV_FILENAME, mime="text/csv")
+    else:
+        st.sidebar.info("No data to download yet.")
+
+# Backup folder info and cleanup button
+st.sidebar.markdown("---")
+size_mb = folder_size_mb(BACKUP_FOLDER)
+st.sidebar.markdown(f"📦 Backup folder: **{BACKUP_FOLDER}**")
+st.sidebar.markdown(f"📏 Total size: **{size_mb:.2f} MB**")
+st.sidebar.markdown(f"🗂️ Backups retention: **{BACKUP_RETENTION_DAYS} days**")
+
+if st.sidebar.button("Check & cleanup old backups"):
+    removed = cleanup_old_backups()
+    if removed:
+        st.sidebar.success(f"Deleted {len(removed)} old backup(s).")
+    else:
+        st.sidebar.info("No old backups to remove.")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Tip: Backups are created automatically when you save an entry. You can manually upload files in the backup folder to Google Drive if you want cloud copies.")
+
+# ===== Main form =====
+st.header("📋 Add this week's entry")
+with st.form("entry_form"):
+    col1, col2 = st.columns(2)
+    with col1:
+        income = st.number_input("💰 Weekly Income (£)", min_value=0.0, value=150.0, step=1.0, format="%.2f")
+        courses = st.number_input("📚 Courses (£)", min_value=0.0, value=0.0, step=1.0, format="%.2f")
+    with col2:
+        laptop = st.number_input("💻 Laptop / Appliances (£)", min_value=0.0, value=0.0, step=1.0, format="%.2f")
+        instruments = st.number_input("🎸 Instruments (£)", min_value=0.0, value=0.0, step=1.0, format="%.2f")
+    other = st.number_input("🛍️ Other (£)", min_value=0.0, value=0.0, step=1.0, format="%.2f")
+
+    submitted = st.form_submit_button("💾 Save Entry & Update Chart")
+
+if submitted:
+    total_expenses = round(courses + laptop + instruments + other, 2)
+    disposable = income - total_expenses
+    if disposable <= 0:
+        recommendation = 0.0
+        message = "You’re spending all or more than your income — hold off on investing this week."
+    else:
+        recommendation = round(disposable * RECOMMENDATION_RATIO, 2)
+        message = f"Based on your budget you could invest about £{recommendation} this week."
+
+    row = {
+        "Date": datetime.now().strftime("%Y-%m-%d"),
+        "Income": float(income),
+        "Courses": float(courses),
+        "Laptop_Appliances": float(laptop),
+        "Instruments": float(instruments),
+        "Other": float(other),
+        "Total_Expenses": float(total_expenses),
+        "Recommended_Investment": float(recommendation)
+    }
+
+    backup_path = save_row(row)
+    st.success("✅ Entry saved and backup created.")
+    st.info(f"Backup file: `{backup_path}`")
+    st.write(message)
+
+# ===== Display full-history chart and data =====
+st.header("📈 Full History")
+df = read_log()
+if df.empty:
+    st.info("No entries yet. Add a weekly entry using the form above.")
+else:
+    # Ensure proper dtypes
+    for c in ["Income", "Courses", "Laptop_Appliances", "Instruments", "Other", "Total_Expenses", "Recommended_Investment"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+
+    # show table
+    st.subheader("Data table")
+    st.dataframe(df.sort_values("Date"))
+
+    # line chart with Plotly dark template
+    fig = px.line(
+        df.sort_values("Date"),
+        x="Date",
+        y=["Income", "Total_Expenses", "Recommended_Investment"],
+        markers=True,
+        labels={"value": "Amount (£)", "variable": "Series"},
+        title="Income, Expenses, and Recommended Investment — Full History"
+    )
+    fig.update_layout(template="plotly_dark", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    st.plotly_chart(fig, use_container_width=True)
+
+# ===== Footer info =====
+st.markdown("---")
+st.caption("Paul's Smart Tracker v3.0 — Dark. Data saved locally in the backup folder.")
